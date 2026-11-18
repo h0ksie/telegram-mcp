@@ -63,6 +63,16 @@ The server currently includes 80+ MCP tools grouped into these areas:
 
 `get_message_reactions` returns an empty list for a message with no reactions. To reuse a custom reaction, pass the returned `custom:<document_id>` value to `send_reaction`.
 
+`get_post_comments(chat_id, message_id, limit=50, with_personal_channels=False)` reads the
+comments under a channel post (newest first) from the channel's linked discussion group,
+with `total`, the number of comments. Pass the channel, not its discussion group. Each
+comment carries the author's `sender_id`. With `with_personal_channels=True` it also returns
+`personal_channels`, a map of `sender_id` to the personal channel the author pinned to their
+profile (`chat_id`, `title`, `username`, `link`), ready for `get_history`. Each author costs
+one `users.getFullUser` request, so at most `TELEGRAM_PERSONAL_CHANNEL_LOOKUP_CAP` (default
+20) distinct authors are checked per call; a flood wait stops the lookups and still returns
+the comments.
+
 `vote_poll(chat_id, message_id, option_indices, account=None)` votes in an existing poll.
 Read the poll with `get_messages` first, then select zero-based answer indices: `[0]`
 for the first answer, or `[0, 2]` for the first and third in a multiple-choice poll.
