@@ -39,6 +39,7 @@ from pythonjsonlogger.json import JsonFormatter
 from telethon import TelegramClient, functions, types, utils
 from telethon.errors import AuthKeyDuplicatedError, FloodWaitError, BotMethodInvalidError, RPCError
 from telethon.errors.rpcerrorlist import rpc_errors_dict
+from telethon.crypto import AuthKey
 from telethon.sessions import StringSession
 from telethon.tl.types import (
     User,
@@ -723,6 +724,45 @@ def _resolve_session_path(session_name: str) -> str:
     return session_name
 
 
+def _file_session_in_memory(session_name: str) -> Any:
+    """Copy a file session's auth key into an in-memory session (file never written).
+
+    Opt-in with TELEGRAM_SESSION_FILE_IN_MEMORY=1. Several MCP clients on one host
+    (for example Claude Desktop plus a linked cloud session) each start their own
+    server process. Sharing one SQLite session file between them fails: Telethon
+    keeps a write transaction open for up to a minute between commits, so the other
+    process gets "database is locked". Reading the auth key once, read-only, and
+    keeping the session in memory means no process writes the file. Pair it with
+    TELEGRAM_SESSION_LOCK=shared so the processes may share the auth key (safe when
+    they reach Telegram from one IP). Update state is not persisted across restarts.
+
+    Returns the original name when the file is missing or holds no auth key, so the
+    runner reports the usual "not authorized" error.
+    """
+    path = Path(session_name if session_name.endswith(".session") else f"{session_name}.session")
+    if not path.exists():
+        return session_name
+    conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
+    try:
+        row = conn.execute("SELECT dc_id, server_address, port, auth_key FROM sessions").fetchone()
+    finally:
+        conn.close()
+    if not row or not row[3]:
+        return session_name
+    session = StringSession()
+    session.set_dc(row[0], row[1], row[2])
+    session.auth_key = AuthKey(data=row[3])
+    return session
+
+
+def _session_from_name(session_name: str) -> Any:
+    """A file session by name, or its in-memory copy when TELEGRAM_SESSION_FILE_IN_MEMORY is on."""
+    resolved = _resolve_session_path(session_name)
+    if _parse_bool_env(os.getenv("TELEGRAM_SESSION_FILE_IN_MEMORY"), False):
+        return _file_session_in_memory(resolved)
+    return resolved
+
+
 def _build_client(session: Any, label: str) -> TelegramClient:
     """Construct a ``TelegramClient`` honoring per-label proxy and flood sleep configuration."""
     if isinstance(session, str):
@@ -848,7 +888,7 @@ def _discover_accounts() -> dict[str, TelegramClient]:
             accounts[label] = _build_client(StringSession(value), label)
         elif key.startswith(prefix_name) and value:
             label = canonical_account_label(key[len(prefix_name) :])
-            accounts[label] = _build_client(_resolve_session_path(value), label)
+            accounts[label] = _build_client(_session_from_name(value), label)
 
     # Backward-compatible unsuffixed variables. A pool (TELEGRAM_SESSION_STRINGS)
     # takes precedence for the default account and claims a free session slot.
@@ -864,7 +904,7 @@ def _discover_accounts() -> dict[str, TelegramClient]:
         elif session_string:
             accounts["default"] = _build_client(StringSession(session_string), "default")
         elif session_name:
-            accounts["default"] = _build_client(_resolve_session_path(session_name), "default")
+            accounts["default"] = _build_client(_session_from_name(session_name), "default")
             if len(accounts) > 1:
                 # The Docker image and .env.example preset TELEGRAM_SESSION_NAME, so next to
                 # labelled accounts it often names a session nobody logged in to. The runner
