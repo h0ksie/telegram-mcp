@@ -686,6 +686,18 @@ TELEGRAM_SESSION_LOCK=shared
 Shared instances coexist with each other but never overlap an exclusive one.
 If you are not sure every client egresses from the same IP, use the pool.
 
+With a file session (`TELEGRAM_SESSION_NAME`), also set
+`TELEGRAM_SESSION_FILE_IN_MEMORY=1`. Each process then reads the auth key from
+the `.session` file once, read-only, and keeps the session in memory, so no
+process writes the file. Without it, processes sharing one SQLite session file
+hit `database is locked`: Telethon holds a write transaction for up to a minute
+between commits. Update state is not persisted across restarts in this mode.
+
+```env
+TELEGRAM_SESSION_LOCK=shared
+TELEGRAM_SESSION_FILE_IN_MEMORY=1
+```
+
 ## Device Identity
 
 These optional variables control how the client appears in Telegram under

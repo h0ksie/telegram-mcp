@@ -100,6 +100,15 @@ EOF
     echo "Записал .env (права 600)"
 }
 
+ensure_shared_session() {
+    # Claude Desktop и подключённые облачные сессии запускают по своей копии сервера.
+    # Обе копии делят одну сессию: ключ читается из файла, сессия живёт в памяти.
+    local line
+    for line in TELEGRAM_SESSION_LOCK=shared TELEGRAM_SESSION_FILE_IN_MEMORY=1; do
+        grep -q "^${line%%=*}=" .env || echo "$line" >>.env
+    done
+}
+
 login_telegram() {
     mkdir -p "$SESSION_DIR"
     chmod 700 "$SESSION_DIR"
@@ -192,6 +201,7 @@ main() {
     fetch_repo
     install_deps
     write_env
+    ensure_shared_session
     login_telegram
     update_claude_config
     restart_claude
